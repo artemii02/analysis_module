@@ -1,0 +1,215 @@
+{
+  "version": "questions-2026.03-demo",
+  "items": [
+    {
+      "question_id": "backend_junior_auth_header",
+      "specialization": "backend",
+      "grade": "junior",
+      "topic": "http_api",
+      "question_text": "Где обычно передают JWT-токен в HTTP-запросе и какие типичные ошибки здесь бывают?",
+      "tags": [
+        "http",
+        "jwt",
+        "authorization",
+        "security"
+      ],
+      "version": "questions-2026.03-demo"
+    },
+    {
+      "question_id": "backend_junior_http_status_codes",
+      "specialization": "backend",
+      "grade": "junior",
+      "topic": "http_api",
+      "question_text": "Когда API должен возвращать 200, 201 и 204, и чем они отличаются от 400, 401, 403, 404 и 500?",
+      "tags": [
+        "http",
+        "status",
+        "api",
+        "response"
+      ],
+      "version": "questions-2026.03-demo"
+    },
+    {
+      "question_id": "backend_junior_idempotency_key",
+      "specialization": "backend",
+      "grade": "junior",
+      "topic": "http_api",
+      "question_text": "Зачем нужен idempotency key при создании ресурса и в каких случаях он особенно полезен?",
+      "tags": [
+        "http",
+        "idempotency",
+        "retry",
+        "api"
+      ],
+      "version": "questions-2026.03-demo"
+    },
+    {
+      "question_id": "backend_junior_inner_left_join",
+      "specialization": "backend",
+      "grade": "junior",
+      "topic": "sql_performance",
+      "question_text": "Чем INNER JOIN отличается от LEFT JOIN и как это влияет на результат запроса?",
+      "tags": [
+        "sql",
+        "join",
+        "database",
+        "query"
+      ],
+      "version": "questions-2026.03-demo"
+    },
+    {
+      "question_id": "backend_junior_n_plus_one",
+      "specialization": "backend",
+      "grade": "junior",
+      "topic": "sql_performance",
+      "question_text": "Что такое проблема N+1 запросов и как её обнаружить?",
+      "tags": [
+        "sql",
+        "orm",
+        "performance",
+        "n+1"
+      ],
+      "version": "questions-2026.03-demo"
+    },
+    {
+      "question_id": "backend_junior_normalization",
+      "specialization": "backend",
+      "grade": "junior",
+      "topic": "sql_performance",
+      "question_text": "Зачем нужна нормализация данных и когда её сознательно нарушают?",
+      "tags": [
+        "sql",
+        "normalization",
+        "schema",
+        "database"
+      ],
+      "version": "questions-2026.03-demo"
+    },
+    {
+      "question_id": "backend_junior_pagination",
+      "specialization": "backend",
+      "grade": "junior",
+      "topic": "http_api",
+      "question_text": "Чем пагинация по offset отличается от cursor pagination и когда каждая подходит?",
+      "tags": [
+        "http",
+        "pagination",
+        "cursor",
+        "offset"
+      ],
+      "version": "questions-2026.03-demo"
+    },
+    {
+      "question_id": "backend_junior_rest_methods",
+      "specialization": "backend",
+      "grade": "junior",
+      "topic": "http_api",
+      "question_text": "Чем отличаются методы GET, POST, PUT и DELETE в REST API?",
+      "tags": [
+        "http",
+        "rest",
+        "api",
+        "methods"
+      ],
+      "version": "questions-2026.03-demo"
+    },
+    {
+      "question_id": "backend_junior_sql_index",
+      "specialization": "backend",
+      "grade": "junior",
+      "topic": "sql_performance",
+      "question_text": "Что такое индекс в SQL-базе данных и когда он помогает?",
+      "tags": [
+        "sql",
+        "database",
+        "index",
+        "query"
+      ],
+      "version": "questions-2026.03-demo"
+    },
+    {
+      "question_id": "backend_junior_transactions_acid",
+      "specialization": "backend",
+      "grade": "junior",
+      "topic": "sql_performance",
+      "question_text": "Что означают свойства ACID у транзакций и зачем они нужны?",
+      "tags": [
+        "sql",
+        "transaction",
+        "acid",
+        "database"
+      ],
+      "version": "questions-2026.03-demo"
+    },
+    {
+      "question_id": "backend_middle_idempotency",
+      "specialization": "backend",
+      "grade": "middle",
+      "topic": "distributed_systems",
+      "question_text": "Что такое идемпотентность API и зачем она нужна в распределенных системах?",
+      "tags": [
+        "idempotency",
+        "api",
+        "distributed",
+        "retries"
+      ],
+      "version": "questions-2026.03-demo"
+    },
+    {
+      "question_id": "devops_junior_docker",
+      "specialization": "devops",
+      "grade": "junior",
+      "topic": "containers",
+      "question_text": "Чем образ Docker отличается от контейнера?",
+      "tags": [
+        "docker",
+        "container",
+        "image",
+        "runtime"
+      ],
+      "version": "questions-2026.03-demo"
+    },
+    {
+      "question_id": "devops_middle_ci_cd",
+      "specialization": "devops",
+      "grade": "middle",
+      "topic": "delivery_pipeline",
+      "question_text": "Чем CI отличается от CD и какие проверки стоит встроить в pipeline?",
+      "tags": [
+        "ci",
+        "cd",
+        "pipeline",
+        "automation"
+      ],
+      "version": "questions-2026.03-demo"
+    },
+    {
+      "question_id": "frontend_junior_virtual_dom",
+      "specialization": "frontend",
+      "grade": "junior",
+      "topic": "react_basics",
+      "question_text": "Что такое Virtual DOM и почему он важен в React?",
+      "tags": [
+        "react",
+        "virtual-dom",
+        "render",
+        "ui"
+      ],
+      "version": "questions-2026.03-demo"
+    },
+    {
+      "question_id": "frontend_middle_state_management",
+      "specialization": "frontend",
+      "grade": "middle",
+      "topic": "frontend_architecture",
+      "question_text": "Как вы выбираете между локальным state, Context и внешним state manager?",
+      "tags": [
+        "react",
+        "state",
+        "context",
+        "architecture"
+      ],
+      "version": "questions-2026.03-demo"
+    }
+  ]
+}

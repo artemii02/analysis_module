@@ -1,0 +1,114 @@
+[
+  {
+    "case_id": "backend_junior_good",
+    "title": "Бэкенд, начальный уровень: уверенная сессия",
+    "subtitle": "Сильные ответы по REST API и SQL-индексам",
+    "specialization": "backend",
+    "grade": "junior",
+    "topics": [
+      "http_api",
+      "sql_performance"
+    ],
+    "items": [
+      {
+        "item_id": "1",
+        "question_id": "backend_junior_rest_methods",
+        "question_text": "Чем отличаются методы GET, POST, PUT и DELETE в REST API?",
+        "answer_text": "GET используется для чтения ресурса и не должен менять состояние сервера. POST обычно применяют для создания ресурса. PUT заменяет ресурс целиком и считается идемпотентным. DELETE удаляет ресурс, и повторный вызов обычно не меняет конечное состояние. На практике это видно на обычном CRUD API.",
+        "tags": [
+          "http",
+          "rest"
+        ]
+      },
+      {
+        "item_id": "2",
+        "question_id": "backend_junior_sql_index",
+        "question_text": "Что такое индекс в SQL-базе данных и когда он помогает?",
+        "answer_text": "Индекс — это дополнительная структура поиска, например B-tree. Он помогает ускорять WHERE, JOIN и иногда ORDER BY, если запросы действительно используют индекс. Но индекс занимает место и делает INSERT или UPDATE дороже, потому что его надо поддерживать.",
+        "tags": [
+          "sql",
+          "index"
+        ]
+      }
+    ]
+  },
+  {
+    "case_id": "backend_junior_weak",
+    "title": "Бэкенд, начальный уровень: слабая сессия",
+    "subtitle": "Есть пробелы и фактические ошибки",
+    "specialization": "backend",
+    "grade": "junior",
+    "topics": [
+      "http_api",
+      "sql_performance"
+    ],
+    "items": [
+      {
+        "item_id": "1",
+        "question_id": "backend_junior_rest_methods",
+        "question_text": "Чем отличаются методы GET, POST, PUT и DELETE в REST API?",
+        "answer_text": "GET можно использовать для изменения данных, если это удобно. POST идемпотентен. PUT и DELETE тоже что-то меняют, но я не помню точную разницу.",
+        "tags": [
+          "http",
+          "rest"
+        ]
+      },
+      {
+        "item_id": "2",
+        "question_id": "backend_junior_sql_index",
+        "question_text": "Что такое индекс в SQL-базе данных и когда он помогает?",
+        "answer_text": "Индекс ускоряет вообще все запросы, и его лучше ставить почти на каждое поле. Про минусы не помню.",
+        "tags": [
+          "sql",
+          "index"
+        ]
+      }
+    ]
+  },
+  {
+    "case_id": "frontend_middle_balanced",
+    "title": "Фронтенд, средний уровень: архитектурный ответ",
+    "subtitle": "Сбалансированный разбор управления состоянием",
+    "specialization": "frontend",
+    "grade": "middle",
+    "topics": [
+      "frontend_architecture"
+    ],
+    "items": [
+      {
+        "item_id": "1",
+        "question_id": "frontend_middle_state_management",
+        "question_text": "Как вы выбираете между локальным state, Context и внешним state manager?",
+        "answer_text": "Я смотрю на область жизни состояния и число потребителей. Локальный state подходит для состояния компонента. Context хорош для общих зависимостей, но при частых обновлениях может быть не лучшим вариантом. Если растет количество экранов, появляется синхронизация, кэширование или сложный shared state, я рассматриваю внешний state manager или отдельную server-state библиотеку. На практике важно разделять local UI state и server state.",
+        "tags": [
+          "react",
+          "state",
+          "context"
+        ]
+      }
+    ]
+  },
+  {
+    "case_id": "devops_middle_good",
+    "title": "DevOps, средний уровень: CI/CD",
+    "subtitle": "Плотный ответ по delivery pipeline",
+    "specialization": "devops",
+    "grade": "middle",
+    "topics": [
+      "delivery_pipeline"
+    ],
+    "items": [
+      {
+        "item_id": "1",
+        "question_id": "devops_middle_ci_cd",
+        "question_text": "Чем CI отличается от CD и какие проверки стоит встроить в pipeline?",
+        "answer_text": "CI отвечает за сборку и автоматические проверки каждого изменения. CD доводит артефакт до готовности к доставке или даже автоматическому deployment. В pipeline я бы добавил lint, unit и integration tests, security scans, versioning артефактов и rollback strategy. Также важно различать continuous delivery и continuous deployment.",
+        "tags": [
+          "ci",
+          "cd",
+          "pipeline"
+        ]
+      }
+    ]
+  }
+]
