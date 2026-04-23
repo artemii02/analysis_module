@@ -20,7 +20,7 @@
 
 `mock` — быстрый режим без загрузки LLM. Используется для проверки консольных команд, API, структуры JSON и общей работоспособности пайплайна.
 
-`ollama` — Docker-режим для запуска API вместе с PostgreSQL и Ollama. Он использует модель `qwen2.5:3b` из Ollama и не подключает LoRA-адаптер из `training/artifacts`.
+`ollama` — альтернативный runtime для отладки и совместимости. Он использует модель `qwen2.5:3b` из Ollama и не подключает LoRA-адаптер из `training/artifacts`. Финальная Docker-сборка ниже использует режим `hf`.
 
 ## Установка для локального HF/LoRA запуска
 
@@ -30,6 +30,12 @@ python -m venv .venv
 pip install -e ".[dev,training,qlora]"
 pip install --force-reinstall torch --index-url https://download.pytorch.org/whl/cu128
 pip install fsspec==2025.3.0
+```
+
+Для минимального локального runtime без скриптов обучения достаточно:
+
+```powershell
+pip install -e ".[dev,hf_runtime]"
 ```
 
 Проверить CUDA:
@@ -108,13 +114,36 @@ pip install fsspec==2025.3.0
 .\start_hf_api.bat
 ```
 
-Запуск API в Docker/Ollama режиме:
+Запуск финальной Docker-сборки в режиме HF/LoRA:
 
 ```powershell
 .\start.bat
 ```
 
-Docker-режим поднимает три сервиса: `analysis-module`, `postgres`, `ollama`.
+По умолчанию `start.bat` поднимает два сервиса: `analysis-module` и `postgres`. Контейнер `analysis-module` загружает базовую модель `Qwen/Qwen2.5-3B-Instruct` из Hugging Face и подключает адаптер `training/artifacts/qwen2.5-3b-interview-full-ru-qlora-v1`.
+В Docker по умолчанию включён `ANALYSIS_WARMUP_LLM_ON_START=true`, поэтому контейнер прогревает HF-модель на старте и становится готовым уже после инициализации runtime.
+
+Для запуска той же сборки на NVIDIA GPU через Docker Compose используй:
+
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+```
+
+В GPU-режиме контейнер использует `TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124` и выставляет `ANALYSIS_HF_DEVICE=cuda:0`.
+
+Для CPU-запуска нужен заметный запас оперативной памяти, потому что 3B-модель без GPU загружается в полном виде. Для серверного развёртывания рекомендуется использовать NVIDIA GPU и файл `docker-compose.gpu.yml`.
+
+Запуск публичной ссылки для backend через `ngrok` поверх локального HF API:
+
+```powershell
+.\start_public_hf.bat
+```
+
+Если локальный API уже запущен и нужен только туннель:
+
+```powershell
+.\start_ngrok.bat 8000
+```
 
 После запуска доступны:
 
@@ -128,6 +157,12 @@ Docker-режим поднимает три сервиса: `analysis-module`, `
 
 ```powershell
 .\stop.bat
+```
+
+Остановка `ngrok`:
+
+```powershell
+.\stop_ngrok.bat
 ```
 
 Получить список вопросов:
@@ -199,6 +234,35 @@ X-API-Key: demo-api-key
 - `recommendations` — итоговые рекомендации.
 - `versions` — версии модели, рубрик, базы знаний, банка вопросов и промпта.
 
+## Публичная ссылка для backend
+
+Для внешнего backend удобнее использовать `async`-режим и публичный туннель `ngrok`.
+
+1. Установить `ngrok` для Windows: https://ngrok.com/downloads/windows
+2. Добавить токен:
+
+```powershell
+ngrok config add-authtoken <YOUR_TOKEN>
+```
+
+или задать его в переменной окружения `NGROK_AUTHTOKEN`.
+
+3. Запустить публичный режим:
+
+```powershell
+.\start_public_hf.bat
+```
+
+После запуска скрипт:
+
+- поднимет локальный HF API, если он ещё не запущен;
+- откроет `ngrok`-туннель на порт `8000`;
+- выведет публичный `https://...ngrok...` URL;
+- сохранит его в `training\reports\ngrok_public_url.txt`;
+- сохранит JSON с endpoint-ами в `training\reports\ngrok_public_url.json`.
+
+Именно этот `public_base_url` backend должен использовать как базовый URL твоего модуля.
+
 ## Настройки модели и API
 
 Основные переменные окружения:
@@ -209,13 +273,23 @@ $env:ANALYSIS_LLM_MODE="hf"
 $env:ANALYSIS_JOB_STORE_BACKEND="memory"
 $env:ANALYSIS_HF_BASE_MODEL="Qwen/Qwen2.5-3B-Instruct"
 $env:ANALYSIS_HF_ADAPTER_PATH="training/artifacts/qwen2.5-3b-interview-full-ru-qlora-v1"
-$env:ANALYSIS_HF_LOAD_IN_4BIT="true"
-$env:ANALYSIS_HF_MAX_NEW_TOKENS="900"
+$env:ANALYSIS_HF_DEVICE="cuda:0"
+$env:ANALYSIS_HF_LOAD_IN_4BIT="false"
+$env:ANALYSIS_HF_MAX_NEW_TOKENS="220"
+$env:ANALYSIS_HF_BATCH_SIZE="3"
+$env:ANALYSIS_HF_RETRY_MAX_NEW_TOKENS="320"
+$env:ANALYSIS_HF_REPAIR_MAX_NEW_TOKENS="220"
+$env:ANALYSIS_WARMUP_LLM_ON_START="true"
 $env:ANALYSIS_MAX_SESSION_ITEMS="20"
 $env:ANALYSIS_MAX_ANSWER_LENGTH="4000"
+$env:TORCH_PACKAGE="torch==2.7.1"
+$env:TORCH_INDEX_URL="https://download.pytorch.org/whl/cpu"
+$env:NGROK_AUTHTOKEN="<YOUR_TOKEN>"
 ```
 
 По умолчанию режим `hf` использует адаптер `training/artifacts/qwen2.5-3b-interview-full-ru-qlora-v1`.
+
+Для Docker-сборки те же настройки можно положить в `.env`. Если сервер с NVIDIA GPU, замени `TORCH_INDEX_URL` на `https://download.pytorch.org/whl/cu124` и запускай compose с файлом `docker-compose.gpu.yml`.
 
 ## Датасет
 

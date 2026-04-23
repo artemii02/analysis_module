@@ -49,6 +49,9 @@ def _build_llm_provider(settings: Settings):
             device=settings.hf_device,
             max_new_tokens=settings.hf_max_new_tokens,
             load_in_4bit=settings.hf_load_in_4bit,
+            batch_size=settings.hf_batch_size,
+            retry_max_new_tokens=settings.hf_retry_max_new_tokens,
+            repair_max_new_tokens=settings.hf_repair_max_new_tokens,
         )
     return MockLLMProvider()
 

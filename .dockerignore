@@ -10,5 +10,13 @@ __pycache__
 .env
 tests
 src/interview_analysis_module.egg-info
-training/artifacts
+interviewcoach_dataset_full_ru
+interviewcoach_dataset_v1
+training/reports
+training/data
+training/scripts
+training/configs
+training/artifacts/*
+!training/artifacts/qwen2.5-3b-interview-full-ru-qlora-v1/
+!training/artifacts/qwen2.5-3b-interview-full-ru-qlora-v1/**
 models/adapters

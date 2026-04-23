@@ -1,0 +1,14 @@
+services:
+  analysis-module:
+    build:
+      args:
+        TORCH_INDEX_URL: "${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu124}"
+    environment:
+      ANALYSIS_HF_DEVICE: "${ANALYSIS_HF_DEVICE:-cuda:0}"
+      ANALYSIS_HF_LOAD_IN_4BIT: "${ANALYSIS_HF_LOAD_IN_4BIT:-false}"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]

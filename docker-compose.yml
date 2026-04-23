@@ -17,51 +17,51 @@ services:
       retries: 20
     restart: unless-stopped
 
-  ollama:
-    image: ollama/ollama:latest
-    container_name: analysis-module-ollama
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-    healthcheck:
-      test: ["CMD", "ollama", "list"]
-      interval: 10s
-      timeout: 5s
-      retries: 30
-    restart: unless-stopped
-
   analysis-module:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        TORCH_PACKAGE: "${TORCH_PACKAGE:-torch==2.7.1}"
+        TORCH_INDEX_URL: "${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}"
+        INSTALL_QLORA_DEPS: "${INSTALL_QLORA_DEPS:-false}"
     container_name: analysis-module-app
     depends_on:
       postgres:
         condition: service_healthy
-      ollama:
-        condition: service_healthy
     environment:
-      ANALYSIS_API_KEY: demo-api-key
-      ANALYSIS_LLM_MODE: ollama
+      ANALYSIS_API_KEY: "${ANALYSIS_API_KEY:-demo-api-key}"
+      ANALYSIS_LLM_MODE: hf
       ANALYSIS_JOB_STORE_BACKEND: postgres
       ANALYSIS_DATABASE_URL: postgresql://analysis:analysis@postgres:5432/analysis_module
-      ANALYSIS_OLLAMA_URL: http://ollama:11434/api/generate
-      ANALYSIS_OLLAMA_MODEL: qwen2.5:3b
-      ANALYSIS_REQUEST_TIMEOUT_SECONDS: 300
-      ANALYSIS_KNOWLEDGE_LIMIT: 1
-      ANALYSIS_HARD_TIMEOUT_SECONDS: 30
-      ANALYSIS_MAX_ANSWER_LENGTH: 4000
-      ANALYSIS_MAX_SESSION_ITEMS: 20
+      ANALYSIS_HF_BASE_MODEL: "${ANALYSIS_HF_BASE_MODEL:-Qwen/Qwen2.5-3B-Instruct}"
+      ANALYSIS_HF_ADAPTER_PATH: /app/training/artifacts/qwen2.5-3b-interview-full-ru-qlora-v1
+      ANALYSIS_HF_DEVICE: "${ANALYSIS_HF_DEVICE:-cpu}"
+      ANALYSIS_HF_LOAD_IN_4BIT: "${ANALYSIS_HF_LOAD_IN_4BIT:-false}"
+      ANALYSIS_HF_MAX_NEW_TOKENS: "${ANALYSIS_HF_MAX_NEW_TOKENS:-220}"
+      ANALYSIS_HF_BATCH_SIZE: "${ANALYSIS_HF_BATCH_SIZE:-3}"
+      ANALYSIS_HF_RETRY_MAX_NEW_TOKENS: "${ANALYSIS_HF_RETRY_MAX_NEW_TOKENS:-320}"
+      ANALYSIS_HF_REPAIR_MAX_NEW_TOKENS: "${ANALYSIS_HF_REPAIR_MAX_NEW_TOKENS:-220}"
+      ANALYSIS_WARMUP_LLM_ON_START: "${ANALYSIS_WARMUP_LLM_ON_START:-true}"
+      ANALYSIS_REQUEST_TIMEOUT_SECONDS: "${ANALYSIS_REQUEST_TIMEOUT_SECONDS:-300}"
+      ANALYSIS_KNOWLEDGE_LIMIT: "${ANALYSIS_KNOWLEDGE_LIMIT:-1}"
+      ANALYSIS_HARD_TIMEOUT_SECONDS: "${ANALYSIS_HARD_TIMEOUT_SECONDS:-30}"
+      ANALYSIS_MAX_ANSWER_LENGTH: "${ANALYSIS_MAX_ANSWER_LENGTH:-4000}"
+      ANALYSIS_MAX_SESSION_ITEMS: "${ANALYSIS_MAX_SESSION_ITEMS:-20}"
+      HF_HOME: /app/.hf-cache
     ports:
       - "8000:8000"
+    volumes:
+      - huggingface_cache:/app/.hf-cache
+    shm_size: "2gb"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/assessment/v1/health').read()"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
+      interval: 20s
+      timeout: 10s
+      retries: 30
+      start_period: 180s
 
 volumes:
   postgres_data:
-  ollama_data:
+  huggingface_cache:

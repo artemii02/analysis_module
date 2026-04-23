@@ -24,26 +24,32 @@ SFT_SYSTEM_PROMPT = """
 Поле оценок должно называться строго criterion_scores, не criteria_scores.
 criterion_scores должен содержать ключи correctness, completeness, clarity, practicality, terminology со значениями 0..100.
 Все текстовые поля должны быть на русском языке.
-Пиши компактно: summary до 2 предложений, каждый список до 3 пунктов.
+Пиши очень компактно: summary в 1 коротком предложении, каждый список до 2 пунктов.
 """.strip()
 
 
 class HFLLMProvider(BaseLLMProvider):
-    prompt_version = "hf-lora-json-ru-v2"
+    prompt_version = "hf-lora-json-ru-v3"
 
     def __init__(
         self,
         base_model: str,
         adapter_path: str | Path | None,
         device: str = "auto",
-        max_new_tokens: int = 900,
+        max_new_tokens: int = 220,
         load_in_4bit: bool = False,
+        batch_size: int = 3,
+        retry_max_new_tokens: int = 320,
+        repair_max_new_tokens: int = 220,
     ) -> None:
         self.base_model = base_model
         self.adapter_path = Path(adapter_path) if adapter_path else None
         self.device = device
         self.max_new_tokens = max_new_tokens
         self.load_in_4bit = load_in_4bit
+        self.batch_size = max(1, batch_size)
+        self.retry_max_new_tokens = max(max_new_tokens, retry_max_new_tokens)
+        self.repair_max_new_tokens = repair_max_new_tokens
         self.model_version = self._build_model_version()
         self._tokenizer = None
         self._model = None
@@ -59,6 +65,30 @@ class HFLLMProvider(BaseLLMProvider):
         parsed = self._generate_and_parse(prompt, schema)
         return _build_assessment(_normalize_payload(parsed), context)
 
+    def assess_batch(self, contexts: list[QuestionAnalysisContext]) -> list[QuestionAssessment]:
+        if not contexts:
+            return []
+
+        assessments: list[QuestionAssessment | None] = [None] * len(contexts)
+        llm_contexts: list[tuple[int, QuestionAnalysisContext]] = []
+        for index, context in enumerate(contexts):
+            grounded = build_grounded_assessment(context)
+            if should_skip_llm(context):
+                assessments[index] = grounded
+                continue
+            llm_contexts.append((index, context))
+
+        if not llm_contexts:
+            return [item for item in assessments if item is not None]
+
+        for start in range(0, len(llm_contexts), self.batch_size):
+            chunk = llm_contexts[start : start + self.batch_size]
+            chunk_assessments = self._assess_chunk(chunk)
+            for index, assessment in chunk_assessments:
+                assessments[index] = assessment
+
+        return [item for item in assessments if item is not None]
+
     def _generate_and_parse(self, prompt: str, schema: dict[str, Any]) -> dict[str, Any]:
         content = self._generate(prompt, self.max_new_tokens)
         try:
@@ -67,8 +97,7 @@ class HFLLMProvider(BaseLLMProvider):
             if exc.code != "INVALID_MODEL_OUTPUT":
                 raise
 
-        expanded_tokens = min(max(self.max_new_tokens * 2, 1200), 1800)
-        content = self._generate(prompt, expanded_tokens)
+        content = self._generate(prompt, self.retry_max_new_tokens)
         try:
             return _parse_llm_json(content)
         except IntegrationError as exc:
@@ -76,8 +105,38 @@ class HFLLMProvider(BaseLLMProvider):
                 raise
 
         repair_prompt = self._build_repair_chat_prompt(content, schema)
-        repaired = self._generate(repair_prompt, min(900, expanded_tokens))
+        repaired = self._generate(repair_prompt, self.repair_max_new_tokens)
         return _parse_llm_json(repaired)
+
+    def _assess_chunk(
+        self,
+        chunk: list[tuple[int, QuestionAnalysisContext]],
+    ) -> list[tuple[int, QuestionAssessment]]:
+        if not chunk:
+            return []
+        if len(chunk) == 1:
+            index, context = chunk[0]
+            return [(index, self.assess(context))]
+
+        prompts = [self._build_chat_prompt(context) for _, context in chunk]
+        try:
+            contents = self._generate_batch(prompts, self.max_new_tokens)
+        except IntegrationError as exc:
+            if exc.code in {"MODEL_TIMEOUT", "MODEL_RUNTIME_ERROR", "MODEL_OUT_OF_MEMORY"} and len(chunk) > 1:
+                midpoint = max(1, len(chunk) // 2)
+                return self._assess_chunk(chunk[:midpoint]) + self._assess_chunk(chunk[midpoint:])
+            raise
+
+        results: list[tuple[int, QuestionAssessment]] = []
+        for (index, context), prompt, content in zip(chunk, prompts, contents, strict=True):
+            try:
+                parsed = _parse_llm_json(content)
+            except IntegrationError as exc:
+                if exc.code != "INVALID_MODEL_OUTPUT":
+                    raise
+                parsed = self._generate_and_parse(prompt, _single_assessment_schema())
+            results.append((index, _build_assessment(_normalize_payload(parsed), context)))
+        return results
 
     def _build_model_version(self) -> str:
         if self.adapter_path:
@@ -85,48 +144,45 @@ class HFLLMProvider(BaseLLMProvider):
         return self.base_model
 
     def _build_chat_prompt(self, context: QuestionAnalysisContext) -> str:
-        user_payload = {
-            "specialization": context.scenario.specialization.value,
-            "grade": context.scenario.grade.value,
-            "topic": context.question.topic,
-            "topic_label": topic_label(context.question.topic),
-            "question_id": context.question.question_id,
-            "question_text": context.session_item.question_text,
-            "answer_text": context.session_item.answer_text,
-            "criteria": [
-                {"name": criterion.name, "weight": criterion.weight, "description": criterion.description}
-                for criterion in context.rubric.criteria
-            ],
-            "expected_keypoints": context.rubric.keypoints,
-            "recommendation_hints": context.rubric.recommendation_hints,
-            "mistake_patterns": [
-                {"trigger_terms": pattern.trigger_terms, "message": pattern.message}
-                for pattern in context.rubric.mistake_patterns
-            ],
-            "context_snippets": [snippet.excerpt for snippet in context.retrieved_chunks],
-            "output_schema": {
-                "criterion_scores": {
-                    "correctness": 0,
-                    "completeness": 0,
-                    "clarity": 0,
-                    "practicality": 0,
-                    "terminology": 0,
-                },
-                "summary": "краткий вывод",
-                "strengths": ["до 3 пунктов"],
-                "issues": ["до 3 пунктов"],
-                "covered_keypoints": ["до 3 пунктов"],
-                "missing_keypoints": ["до 3 пунктов"],
-                "detected_mistakes": ["до 3 пунктов"],
-                "recommendations": ["до 3 пунктов"],
-            },
-        }
+        user_payload = self._build_user_payload(context)
         return self._apply_chat_template(
             [
                 {"role": "system", "content": SFT_SYSTEM_PROMPT},
                 {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
             ]
         )
+
+    def _build_user_payload(self, context: QuestionAnalysisContext) -> dict[str, Any]:
+        return {
+            "specialization": context.scenario.specialization.value,
+            "grade": context.scenario.grade.value,
+            "topic_code": context.question.topic,
+            "topic_label": topic_label(context.question.topic),
+            "question_id": context.question.question_id,
+            "question_text": context.session_item.question_text,
+            "answer_text": context.session_item.answer_text,
+            "criterion_weights": {
+                criterion.name: criterion.weight
+                for criterion in context.rubric.criteria
+            },
+            "expected_keypoints": context.rubric.keypoints[:4],
+            "recommendation_hints": context.rubric.recommendation_hints[:2],
+            "mistake_hints": [
+                pattern.message
+                for pattern in context.rubric.mistake_patterns[:2]
+            ],
+            "context_snippets": [snippet.excerpt for snippet in context.retrieved_chunks[:1]],
+            "required_json_keys": [
+                "criterion_scores",
+                "summary",
+                "strengths",
+                "issues",
+                "covered_keypoints",
+                "missing_keypoints",
+                "detected_mistakes",
+                "recommendations",
+            ],
+        }
 
     def _build_repair_chat_prompt(self, raw_content: str, schema: dict[str, Any]) -> str:
         return self._apply_chat_template(
@@ -174,6 +230,40 @@ class HFLLMProvider(BaseLLMProvider):
                 details={"reason": message[:500]},
             ) from exc
 
+    def _generate_batch(self, prompts: list[str], max_new_tokens: int) -> list[str]:
+        tokenizer, model = self._load()
+        torch = self._torch
+        try:
+            inputs = tokenizer(
+                prompts,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+            )
+            input_device = self._input_device(model)
+            inputs = {key: value.to(input_device) for key, value in inputs.items()}
+            prompt_token_count = inputs["input_ids"].shape[-1]
+            with torch.inference_mode():
+                output_ids = model.generate(
+                    **inputs,
+                    max_new_tokens=max_new_tokens,
+                    do_sample=False,
+                    pad_token_id=tokenizer.eos_token_id,
+                    eos_token_id=tokenizer.eos_token_id,
+                )
+            generated = output_ids[:, prompt_token_count:]
+            return [item.strip() for item in tokenizer.batch_decode(generated, skip_special_tokens=True)]
+        except RuntimeError as exc:
+            message = str(exc)
+            code = "MODEL_RUNTIME_ERROR"
+            if "out of memory" in message.lower():
+                code = "MODEL_OUT_OF_MEMORY"
+            raise IntegrationError(
+                "Ошибка локальной HF/LoRA модели при пакетной генерации ответа.",
+                code=code,
+                details={"reason": message[:500]},
+            ) from exc
+
     def _load(self):
         if self._tokenizer is not None and self._model is not None:
             return self._tokenizer, self._model
@@ -183,15 +273,20 @@ class HFLLMProvider(BaseLLMProvider):
             from transformers import AutoModelForCausalLM, AutoTokenizer
         except ImportError as exc:
             raise IntegrationError(
-                "Для режима hf нужны зависимости transformers, torch и peft. Установи: pip install -e .[training]",
+                "Для режима hf нужны зависимости transformers, torch и peft. Установи: pip install -e .[hf_runtime]",
                 code="MODEL_DEPENDENCIES_MISSING",
             ) from exc
 
         self._torch = torch
+        if torch.cuda.is_available():
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
         tokenizer = AutoTokenizer.from_pretrained(self.base_model, trust_remote_code=True)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.padding_side = "left"
 
+        runtime_device = self._resolve_runtime_device(torch)
         model_kwargs: dict[str, Any] = {"trust_remote_code": True}
         if self.load_in_4bit:
             try:
@@ -208,13 +303,11 @@ class HFLLMProvider(BaseLLMProvider):
                 bnb_4bit_use_double_quant=True,
             )
             model_kwargs["device_map"] = "auto"
-        elif self.device == "auto" and torch.cuda.is_available():
-            model_kwargs["torch_dtype"] = torch.float16
-            model_kwargs["device_map"] = "auto"
-        elif self.device.startswith("cuda"):
-            model_kwargs["torch_dtype"] = torch.float16
+            model_kwargs["dtype"] = torch.float16
+        elif runtime_device.startswith("cuda"):
+            model_kwargs["dtype"] = torch.float16
         else:
-            model_kwargs["torch_dtype"] = torch.float32
+            model_kwargs["dtype"] = torch.float32
 
         try:
             model = AutoModelForCausalLM.from_pretrained(self.base_model, **model_kwargs)
@@ -229,13 +322,15 @@ class HFLLMProvider(BaseLLMProvider):
                     from peft import PeftModel
                 except ImportError as exc:
                     raise IntegrationError(
-                        "Для загрузки LoRA-адаптера нужна зависимость peft. Установи: pip install -e .[training]",
+                        "Для загрузки LoRA-адаптера нужна зависимость peft. Установи: pip install -e .[hf_runtime]",
                         code="MODEL_DEPENDENCIES_MISSING",
                     ) from exc
                 model = PeftModel.from_pretrained(model, self.adapter_path.as_posix())
-            if "device_map" not in model_kwargs and self.device != "auto":
-                model = model.to(self.device)
+            if "device_map" not in model_kwargs:
+                model = model.to(runtime_device)
             model.eval()
+            if hasattr(model, "generation_config") and model.generation_config is not None:
+                model.generation_config.use_cache = True
         except IntegrationError:
             raise
         except Exception as exc:
@@ -248,6 +343,13 @@ class HFLLMProvider(BaseLLMProvider):
         self._tokenizer = tokenizer
         self._model = model
         return tokenizer, model
+
+    def _resolve_runtime_device(self, torch) -> str:
+        if self.device != "auto":
+            return self.device
+        if torch.cuda.is_available():
+            return "cuda:0"
+        return "cpu"
 
     def _input_device(self, model):
         try:

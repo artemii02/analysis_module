@@ -25,6 +25,10 @@ class Settings:
     hf_device: str
     hf_load_in_4bit: bool
     hf_max_new_tokens: int
+    hf_batch_size: int
+    hf_retry_max_new_tokens: int
+    hf_repair_max_new_tokens: int
+    warmup_llm_on_start: bool
     request_timeout_seconds: int
     knowledge_limit: int
     hard_timeout_seconds: int
@@ -54,8 +58,12 @@ def get_settings() -> Settings:
         hf_base_model=os.getenv("ANALYSIS_HF_BASE_MODEL", "Qwen/Qwen2.5-3B-Instruct"),
         hf_adapter_path=_optional_path(os.getenv("ANALYSIS_HF_ADAPTER_PATH", "training/artifacts/qwen2.5-3b-interview-full-ru-qlora-v1")),
         hf_device=os.getenv("ANALYSIS_HF_DEVICE", "auto").strip().lower(),
-        hf_load_in_4bit=_env_bool("ANALYSIS_HF_LOAD_IN_4BIT", True),
-        hf_max_new_tokens=int(os.getenv("ANALYSIS_HF_MAX_NEW_TOKENS", "900")),
+        hf_load_in_4bit=_env_bool("ANALYSIS_HF_LOAD_IN_4BIT", False),
+        hf_max_new_tokens=int(os.getenv("ANALYSIS_HF_MAX_NEW_TOKENS", "220")),
+        hf_batch_size=int(os.getenv("ANALYSIS_HF_BATCH_SIZE", "3")),
+        hf_retry_max_new_tokens=int(os.getenv("ANALYSIS_HF_RETRY_MAX_NEW_TOKENS", "320")),
+        hf_repair_max_new_tokens=int(os.getenv("ANALYSIS_HF_REPAIR_MAX_NEW_TOKENS", "220")),
+        warmup_llm_on_start=_env_bool("ANALYSIS_WARMUP_LLM_ON_START", False),
         request_timeout_seconds=int(os.getenv("ANALYSIS_REQUEST_TIMEOUT_SECONDS", "300")),
         knowledge_limit=int(os.getenv("ANALYSIS_KNOWLEDGE_LIMIT", "1")),
         hard_timeout_seconds=int(os.getenv("ANALYSIS_HARD_TIMEOUT_SECONDS", "30")),
