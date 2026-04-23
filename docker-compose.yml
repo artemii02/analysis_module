@@ -50,7 +50,7 @@ services:
       ANALYSIS_MAX_SESSION_ITEMS: "${ANALYSIS_MAX_SESSION_ITEMS:-20}"
       HF_HOME: /app/.hf-cache
     ports:
-      - "8000:8000"
+      - "22:8000"
     volumes:
       - huggingface_cache:/app/.hf-cache
     shm_size: "2gb"
