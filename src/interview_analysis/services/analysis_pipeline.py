@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from interview_analysis.core.topic_catalog import topic_label
 from interview_analysis.models import AssessmentReport, QuestionAnalysisContext, QuestionFeedback
 from interview_analysis.repositories.content_repository import JSONContentRepository
@@ -7,6 +9,9 @@ from interview_analysis.services.llm.base import BaseLLMProvider
 from interview_analysis.services.preprocessor import normalize_answer
 from interview_analysis.services.report_builder import ReportBuilder
 from interview_analysis.services.retrieval import SimpleKnowledgeRetriever
+
+
+logger = logging.getLogger(__name__)
 
 
 class AnalysisPipeline:
@@ -25,16 +30,25 @@ class AnalysisPipeline:
     def analyze(self, request) -> AssessmentReport:
         contexts: list[QuestionAnalysisContext] = []
         for item in request.items:
-            question = self.repository.get_question(
+            question = self.repository.resolve_question(
                 item.question_id,
+                item.question_text,
                 request.scenario.specialization,
                 request.scenario.grade,
             )
             rubric = self.repository.get_rubric(
-                item.question_id,
+                question.question_id,
                 request.scenario.specialization,
                 request.scenario.grade,
             )
+            if question.question_id != item.question_id:
+                logger.info(
+                    'analysis.question_resolved external_question_id=%s internal_question_id=%s specialization=%s grade=%s',
+                    item.question_id,
+                    question.question_id,
+                    request.scenario.specialization.value,
+                    request.scenario.grade.value,
+                )
             retrieved_chunks = self.retriever.retrieve(request.scenario, item, question)
             normalized_answer = normalize_answer(item.answer_text)
             contexts.append(

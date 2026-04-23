@@ -163,6 +163,35 @@ def test_pipeline_rejects_more_than_twenty_items() -> None:
         raise AssertionError('Expected InvalidInputError for more than 20 items')
 
 
+def test_pipeline_resolves_external_question_id_by_question_text() -> None:
+    service = build_service()
+    request = AssessmentRequest(
+        request_id='req-004',
+        session_id='session-004',
+        client_id='main-backend',
+        mode=ExecutionMode.SYNC,
+        scenario=ScenarioContext(
+            specialization=Specialization.BACKEND,
+            grade=Grade.JUNIOR,
+        ),
+        items=[
+            SessionItem(
+                item_id='item-1',
+                question_id='21000000-0000-0000-0000-000000000001',
+                question_text='В чём разница между PUT и PATCH?',
+                answer_text='PUT обычно заменяет ресурс целиком, а PATCH используют для частичного обновления.',
+            )
+        ],
+    )
+
+    submission = service.register_request(request)
+    report = service.process_sync(submission.job.job_id, request)
+
+    assert len(report.questions) == 1
+    assert report.questions[0].question_id == '21000000-0000-0000-0000-000000000001'
+    assert report.questions[0].topic == 'HTTP и REST'
+
+
 
 
 

@@ -20,6 +20,7 @@ class JSONContentRepository:
     def __init__(self, data_dir: Path) -> None:
         self.data_dir = data_dir
         self._questions, self._questions_version = self._load_questions()
+        self._question_text_index = self._build_question_text_index()
         self._rubrics, self._rubrics_version = self._load_rubrics()
         self._knowledge_chunks, self._kb_version = self._load_knowledge()
 
@@ -99,6 +100,23 @@ class JSONContentRepository:
             raise UnknownQuestionError(question_id)
         return question
 
+    def resolve_question(
+        self,
+        question_id: str,
+        question_text: str,
+        specialization: Specialization,
+        grade: Grade,
+    ) -> QuestionDefinition:
+        question = self._questions.get(question_id)
+        if question is not None and question.specialization == specialization and question.grade == grade:
+            return question
+
+        normalized_text = _normalize_question_text(question_text)
+        resolved_question = self._question_text_index.get((specialization, grade, normalized_text))
+        if resolved_question is not None:
+            return resolved_question
+        raise UnknownQuestionError(question_id)
+
     def get_rubric(
         self,
         question_id: str,
@@ -143,3 +161,19 @@ class JSONContentRepository:
             questions_version=self._questions_version,
             prompt_version=prompt_version,
         )
+
+    def _build_question_text_index(self) -> dict[tuple[Specialization, Grade, str], QuestionDefinition]:
+        index: dict[tuple[Specialization, Grade, str], QuestionDefinition] = {}
+        for question in self._questions.values():
+            index[
+                (
+                    question.specialization,
+                    question.grade,
+                    _normalize_question_text(question.question_text),
+                )
+            ] = question
+        return index
+
+
+def _normalize_question_text(value: str) -> str:
+    return " ".join(value.strip().lower().replace("ё", "е").split())
