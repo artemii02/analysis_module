@@ -401,7 +401,7 @@ def _build_assessment(parsed: dict, context: QuestionAnalysisContext) -> Questio
         if isinstance(raw_scores, dict)
         else grounded.criterion_scores
     )
-    return QuestionAssessment(
+    assessment = QuestionAssessment(
         score=_weighted_score(criterion_scores, context.rubric.criteria),
         criterion_scores=criterion_scores,
         summary=_coerce_text(parsed.get("summary")) or grounded.summary,
@@ -412,6 +412,19 @@ def _build_assessment(parsed: dict, context: QuestionAnalysisContext) -> Questio
         detected_mistakes=_coerce_text_list(parsed.get("detected_mistakes"), limit=3) or grounded.detected_mistakes,
         recommendations=_coerce_text_list(parsed.get("recommendations"), limit=3) or grounded.recommendations,
     )
+    logger.info(
+        'assessment.build.sources item_id=%s question_id=%s summary=%s strengths=%s issues=%s covered=%s missing=%s mistakes=%s recommendations=%s',
+        context.session_item.item_id,
+        context.session_item.question_id,
+        _field_source(_coerce_text(parsed.get("summary"))),
+        _field_source(_coerce_text_list(parsed.get("strengths"), limit=3)),
+        _field_source(_coerce_text_list(parsed.get("issues"), limit=3)),
+        _field_source(_coerce_text_list(parsed.get("covered_keypoints"), limit=3)),
+        _field_source(_coerce_text_list(parsed.get("missing_keypoints"), limit=3)),
+        _field_source(_coerce_text_list(parsed.get("detected_mistakes"), limit=3)),
+        _field_source(_coerce_text_list(parsed.get("recommendations"), limit=3)),
+    )
+    return assessment
 
 
 
@@ -537,3 +550,9 @@ def _salvage_partial_assessment(content: str) -> dict | None:
 
 def _duration_ms(started_at: float) -> int:
     return round((perf_counter() - started_at) * 1000)
+
+
+def _field_source(value: str | list[str]) -> str:
+    if isinstance(value, list):
+        return "model" if value else "grounded"
+    return "model" if value else "grounded"

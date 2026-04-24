@@ -1,15 +1,25 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from collections import defaultdict
 from statistics import mean
 
 from interview_analysis.core.serialization import utcnow_iso
+from interview_analysis.core.topic_catalog import topic_label
 from interview_analysis.models import (
     AssessmentReport,
     QuestionFeedback,
     TopicSummary,
     VersionInfo,
 )
+
+
+CRITERION_GUIDANCE = {
+    'correctness': 'Проверить техническую корректность формулировок и убрать неточные или спорные утверждения.',
+    'completeness': 'Строить ответ полнее: дать определение, ключевые различия, ограничения и итог.',
+    'clarity': 'Структурировать ответ короткими логическими блоками и явно разделять основные тезисы.',
+    'practicality': 'Добавлять практический сценарий применения, ограничения и последствия выбранного решения.',
+    'terminology': 'Использовать точные технические термины и корректные названия сущностей по теме.',
+}
 
 
 class ReportBuilder:
@@ -30,7 +40,6 @@ class ReportBuilder:
             grouped[item.topic].append(item)
 
         topic_summaries: list[TopicSummary] = []
-        recommendations: list[str] = []
         for topic, items in grouped.items():
             strengths = _deduplicate(
                 strength
@@ -50,15 +59,19 @@ class ReportBuilder:
                     gaps=gaps,
                 )
             )
-            recommendations.extend(item for feedback in items for item in feedback.recommendations)
 
         topic_summaries.sort(key=lambda item: item.average_score)
-        recommendations = _deduplicate(recommendations)[:6]
+        recommendations = _build_session_recommendations(
+            feedback_items=feedback_items,
+            topic_summaries=topic_summaries,
+            criterion_scores=criterion_scores,
+            overall_score=overall_score,
+        )
         weakest_topic = topic_summaries[0].topic if topic_summaries else "unknown"
         summary = (
             f"Сформирован пост-сессионный отчёт по {len(feedback_items)} вопросам. "
             f"Средний балл по сессии: {overall_score}/100. "
-            f"Наибольшее внимание стоит уделить теме '{weakest_topic}'."
+            f"Наибольшее внимание стоит уделить теме '{topic_label(weakest_topic)}'."
         )
 
         return AssessmentReport(
@@ -86,6 +99,79 @@ def _aggregate_criterion_scores(feedback_items: list[QuestionFeedback]) -> dict[
         criterion_name: round(mean(item.criterion_scores.get(criterion_name, 0) for item in feedback_items))
         for criterion_name in criterion_names
     }
+
+
+def _build_session_recommendations(
+    *,
+    feedback_items: list[QuestionFeedback],
+    topic_summaries: list[TopicSummary],
+    criterion_scores: dict[str, int],
+    overall_score: int,
+) -> list[str]:
+    recommendations: list[str] = []
+    weakest_questions = sorted(feedback_items, key=lambda item: item.score)[:3]
+    weakest_topics = topic_summaries[:2]
+    weakest_criteria = sorted(criterion_scores.items(), key=lambda item: item[1])[:2]
+
+    recommendations.append(_score_band_recommendation(overall_score, weakest_topics))
+
+    for criterion_name, score in weakest_criteria:
+        if score < 75:
+            recommendations.append(CRITERION_GUIDANCE[criterion_name])
+
+    for feedback in weakest_questions:
+        recommendations.extend(feedback.recommendations[:2])
+        for keypoint in feedback.missing_keypoints[:1]:
+            recommendations.append(
+                f"Повторить пункт '{keypoint}' на вопросе '{_short_question(feedback.question_text)}'."
+            )
+        for issue in feedback.issues[:1]:
+            recommendations.append(issue)
+
+    for topic in weakest_topics:
+        display_topic = topic_label(topic.topic)
+        if topic.average_score < 40:
+            recommendations.append(
+                f"Вернуться к базе по теме '{display_topic}' и заново разобрать определения, ключевые различия и типовые сценарии."
+            )
+        elif topic.average_score < 70:
+            recommendations.append(
+                f"Усилить тему '{display_topic}': довести ответы до структуры 'определение - детали - практический пример'."
+            )
+        else:
+            recommendations.append(
+                f"Для темы '{display_topic}' добавить больше граничных случаев, ограничений и практических нюансов."
+            )
+
+    return _deduplicate(recommendations)[:6]
+
+
+def _score_band_recommendation(overall_score: int, weakest_topics: list[TopicSummary]) -> str:
+    weakest_topic = topic_label(weakest_topics[0].topic) if weakest_topics else 'ключевым темам'
+    if overall_score < 30:
+        return (
+            f"Сначала закрыть фундаментальные пробелы по теме '{weakest_topic}', "
+            "после чего повторно пройти базовые вопросы без подсказок."
+        )
+    if overall_score < 60:
+        return (
+            f"Сфокусироваться на слабой теме '{weakest_topic}' и довести ответы до уверенного среднего уровня "
+            "по полноте и корректности."
+        )
+    if overall_score < 80:
+        return (
+            f"Доработать тему '{weakest_topic}' до уверенного уровня: добавить больше точности, структуры и практических деталей."
+        )
+    return (
+        f"Сохранить общий уровень по сессии и точечно углубить тему '{weakest_topic}' через сложные кейсы и пограничные сценарии."
+    )
+
+
+def _short_question(question_text: str, limit: int = 72) -> str:
+    normalized = ' '.join(question_text.split())
+    if len(normalized) <= limit:
+        return normalized
+    return f"{normalized[:limit].rstrip()}..."
 
 
 def _deduplicate(values) -> list[str]:

@@ -23,30 +23,32 @@ logger = logging.getLogger(__name__)
 
 
 def _hf_assessment_schema() -> dict[str, Any]:
-    return {
-        "type": "object",
-        "properties": {
-            "criterion_scores": _single_assessment_schema()["properties"]["criterion_scores"],
-            "summary": {"type": "string"},
-        },
-        "required": ["criterion_scores", "summary"],
-    }
+    return _single_assessment_schema()
 
 
 SFT_SYSTEM_PROMPT = """
 Ты оцениваешь технический ответ кандидата на русском языке.
 Верни только валидный JSON без markdown, комментариев и текста вне JSON.
-Обязательные поля: criterion_scores и summary.
+Обязательные поля: criterion_scores, summary, strengths, issues, covered_keypoints, missing_keypoints, detected_mistakes, recommendations.
 Поле оценок должно называться строго criterion_scores, не criteria_scores.
 criterion_scores должен содержать ключи correctness, completeness, clarity, practicality, terminology со значениями 0..100.
 Все текстовые поля должны быть на русском языке.
 Не добавляй дополнительные поля.
-Пиши очень компактно: summary в 1 коротком предложении до 12 слов.
+Опирайся только на переданные вопрос, ответ, ключевые пункты, шаблоны ошибок и контекст.
+strengths должны быть конкретными и относиться только к тому, что кандидат действительно сказал правильно.
+Если в ответе есть хотя бы один корректный технический фрагмент, укажи 1-3 сильные стороны. Если корректных фрагментов нет, верни пустой список.
+issues и missing_keypoints должны отражать реальные пробелы именно этого ответа, а не общие советы.
+recommendations должны быть персонализированы под текущий ответ:
+- при низком качестве ответа делай рекомендации базовыми и восстановительными;
+- при среднем качестве указывай, чего не хватило до уверенного ответа;
+- при хорошем качестве предлагай точечные улучшения глубины, точности и практики.
+Не повторяй одинаковые общие фразы в разных полях.
+Пиши компактно: summary до 2 коротких предложений, списки до 3 элементов.
 """.strip()
 
 
 class HFLLMProvider(BaseLLMProvider):
-    prompt_version = "hf-lora-json-ru-v3"
+    prompt_version = "hf-lora-json-ru-v4"
 
     def __init__(
         self,
@@ -265,16 +267,42 @@ class HFLLMProvider(BaseLLMProvider):
             "question_id": context.question.question_id,
             "question_text": context.session_item.question_text,
             "answer_text": context.session_item.answer_text,
-            "criterion_weights": {
-                criterion.name: criterion.weight
+            "criteria": [
+                {
+                    "name": criterion.name,
+                    "weight": criterion.weight,
+                    "description": criterion.description,
+                }
                 for criterion in context.rubric.criteria
-            },
-            "expected_keypoints": context.rubric.keypoints[:2],
-            "context_snippets": [snippet.excerpt for snippet in context.retrieved_chunks[:1]],
+            ],
+            "expected_keypoints": context.rubric.keypoints[:4],
+            "recommendation_hints": context.rubric.recommendation_hints[:4],
+            "mistake_patterns": [
+                {
+                    "trigger_terms": pattern.trigger_terms,
+                    "message": pattern.message,
+                }
+                for pattern in context.rubric.mistake_patterns[:4]
+            ],
+            "context_snippets": [snippet.excerpt for snippet in context.retrieved_chunks[:2]],
             "required_json_keys": [
                 "criterion_scores",
                 "summary",
+                "strengths",
+                "issues",
+                "covered_keypoints",
+                "missing_keypoints",
+                "detected_mistakes",
+                "recommendations",
             ],
+            "list_limits": {
+                "strengths": 3,
+                "issues": 3,
+                "covered_keypoints": 3,
+                "missing_keypoints": 3,
+                "detected_mistakes": 3,
+                "recommendations": 3,
+            },
         }
 
     def _build_repair_chat_prompt(self, raw_content: str, schema: dict[str, Any]) -> str:

@@ -206,6 +206,32 @@ def test_assess_batch_logs_invalid_batch_item_output(caplog) -> None:
     assert any('item_id=item-1' in record.message for record in caplog.records)
 
 
+def test_build_user_payload_contains_full_personalization_context() -> None:
+    provider = HFLLMProvider(
+        base_model='Qwen/Qwen2.5-3B-Instruct',
+        adapter_path=None,
+        batch_size=1,
+        load_in_4bit=False,
+    )
+    context = _build_context('item-1')
+
+    payload = provider._build_user_payload(context)
+
+    assert payload['required_json_keys'] == [
+        'criterion_scores',
+        'summary',
+        'strengths',
+        'issues',
+        'covered_keypoints',
+        'missing_keypoints',
+        'detected_mistakes',
+        'recommendations',
+    ]
+    assert payload['recommendation_hints'] == ['Add more detail']
+    assert isinstance(payload['criteria'], list)
+    assert payload['list_limits']['recommendations'] == 3
+
+
 def _build_context(item_id: str, answer_text: str | None = None) -> QuestionAnalysisContext:
     scenario = ScenarioContext(
         specialization=Specialization.BACKEND,
