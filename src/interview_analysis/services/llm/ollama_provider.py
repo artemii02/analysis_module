@@ -3,6 +3,7 @@
 import json
 import logging
 from pathlib import Path
+from time import perf_counter
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -143,6 +144,7 @@ class OllamaLLMProvider:
             return _parse_llm_json(repaired)
 
     def _generate(self, prompt: str, max_tokens: int, response_format: str | dict = "json") -> str:
+        started = perf_counter()
         payload = {
             "model": self.model,
             "prompt": prompt,
@@ -164,21 +166,53 @@ class OllamaLLMProvider:
             with urlopen(request, timeout=self.timeout_seconds) as response:
                 raw_payload = json.loads(response.read().decode("utf-8"))
         except HTTPError as exc:
+            logger.warning(
+                'ollama.generate.failed model=%s max_tokens=%s prompt_chars=%s duration_ms=%s code=MODEL_HTTP_ERROR status_code=%s',
+                self.model,
+                max_tokens,
+                len(prompt),
+                _duration_ms(started),
+                exc.code,
+            )
             raise IntegrationError(
                 "Ошибка обращения к Ollama по HTTP.",
                 code="MODEL_HTTP_ERROR",
                 details={"status_code": exc.code},
             ) from exc
         except URLError as exc:
+            logger.warning(
+                'ollama.generate.failed model=%s max_tokens=%s prompt_chars=%s duration_ms=%s code=MODEL_UNAVAILABLE reason=%s',
+                self.model,
+                max_tokens,
+                len(prompt),
+                _duration_ms(started),
+                str(exc.reason)[:300],
+            )
             raise IntegrationError(
                 "Не удалось подключиться к локальному сервису Ollama.",
                 code="MODEL_UNAVAILABLE",
                 details={"reason": str(exc.reason)},
             ) from exc
         except TimeoutError as exc:
+            logger.warning(
+                'ollama.generate.failed model=%s max_tokens=%s prompt_chars=%s duration_ms=%s code=MODEL_TIMEOUT',
+                self.model,
+                max_tokens,
+                len(prompt),
+                _duration_ms(started),
+            )
             raise IntegrationError("Модель превысила время ожидания ответа.", code="MODEL_TIMEOUT") from exc
 
-        return str(raw_payload.get("response", ""))
+        content = str(raw_payload.get("response", ""))
+        logger.info(
+            'ollama.generate.completed model=%s max_tokens=%s prompt_chars=%s output_len=%s duration_ms=%s',
+            self.model,
+            max_tokens,
+            len(prompt),
+            len(content),
+            _duration_ms(started),
+        )
+        return content
 
     def _should_fallback(self, exc: IntegrationError) -> bool:
         if not self.fallback_to_grounded:
@@ -360,17 +394,23 @@ def _build_batch_assessments(parsed: dict, contexts: list[QuestionAnalysisContex
 
 
 def _build_assessment(parsed: dict, context: QuestionAnalysisContext) -> QuestionAssessment:
-    criterion_scores = _coerce_criterion_scores(parsed.get("criterion_scores", {}), context.rubric.criteria)
+    grounded = build_grounded_assessment(context)
+    raw_scores = parsed.get("criterion_scores") or parsed.get("criteria_scores")
+    criterion_scores = (
+        _coerce_criterion_scores(raw_scores, context.rubric.criteria)
+        if isinstance(raw_scores, dict)
+        else grounded.criterion_scores
+    )
     return QuestionAssessment(
         score=_weighted_score(criterion_scores, context.rubric.criteria),
         criterion_scores=criterion_scores,
-        summary=_coerce_text(parsed.get("summary")),
-        strengths=_coerce_text_list(parsed.get("strengths"), limit=3),
-        issues=_coerce_text_list(parsed.get("issues"), limit=3),
-        covered_keypoints=_coerce_text_list(parsed.get("covered_keypoints"), limit=3),
-        missing_keypoints=_coerce_text_list(parsed.get("missing_keypoints"), limit=3),
-        detected_mistakes=_coerce_text_list(parsed.get("detected_mistakes"), limit=3),
-        recommendations=_coerce_text_list(parsed.get("recommendations"), limit=3),
+        summary=_coerce_text(parsed.get("summary")) or grounded.summary,
+        strengths=_coerce_text_list(parsed.get("strengths"), limit=3) or grounded.strengths,
+        issues=_coerce_text_list(parsed.get("issues"), limit=3) or grounded.issues,
+        covered_keypoints=_coerce_text_list(parsed.get("covered_keypoints"), limit=3) or grounded.covered_keypoints,
+        missing_keypoints=_coerce_text_list(parsed.get("missing_keypoints"), limit=3) or grounded.missing_keypoints,
+        detected_mistakes=_coerce_text_list(parsed.get("detected_mistakes"), limit=3) or grounded.detected_mistakes,
+        recommendations=_coerce_text_list(parsed.get("recommendations"), limit=3) or grounded.recommendations,
     )
 
 
@@ -447,8 +487,53 @@ def _parse_llm_json(content: str) -> dict:
     try:
         return json.loads(stripped[start : end + 1])
     except json.JSONDecodeError as exc:
+        salvaged = _salvage_partial_assessment(stripped[start:] if start != -1 else stripped)
+        if salvaged is not None:
+            return salvaged
         raise IntegrationError(
             "Не удалось разобрать JSON из ответа модели.",
             code="INVALID_MODEL_OUTPUT",
             details={"snippet": stripped[start : end + 1][:300]},
         ) from exc
+
+
+def _salvage_partial_assessment(content: str) -> dict | None:
+    score_names = ("correctness", "completeness", "clarity", "practicality", "terminology")
+    criterion_scores: dict[str, int] = {}
+    for name in score_names:
+        marker = f'"{name}"'
+        index = content.find(marker)
+        if index == -1:
+            return None
+        colon_index = content.find(":", index)
+        if colon_index == -1:
+            return None
+        value_chars: list[str] = []
+        for char in content[colon_index + 1 :]:
+            if char in "-0123456789":
+                value_chars.append(char)
+                continue
+            if value_chars:
+                break
+        if not value_chars:
+            return None
+        criterion_scores[name] = max(0, min(100, int("".join(value_chars))))
+
+    summary = ""
+    summary_marker = '"summary"'
+    summary_index = content.find(summary_marker)
+    if summary_index != -1:
+        first_quote = content.find('"', content.find(":", summary_index) + 1)
+        if first_quote != -1:
+            second_quote = content.find('"', first_quote + 1)
+            if second_quote != -1:
+                summary = content[first_quote + 1 : second_quote]
+
+    return {
+        "criterion_scores": criterion_scores,
+        "summary": summary,
+    }
+
+
+def _duration_ms(started_at: float) -> int:
+    return round((perf_counter() - started_at) * 1000)

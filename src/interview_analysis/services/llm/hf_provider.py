@@ -3,6 +3,7 @@
 import json
 import logging
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 from interview_analysis.core.topic_catalog import topic_label
@@ -21,14 +22,26 @@ from interview_analysis.services.llm.ollama_provider import (
 logger = logging.getLogger(__name__)
 
 
+def _hf_assessment_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "criterion_scores": _single_assessment_schema()["properties"]["criterion_scores"],
+            "summary": {"type": "string"},
+        },
+        "required": ["criterion_scores", "summary"],
+    }
+
+
 SFT_SYSTEM_PROMPT = """
 Ты оцениваешь технический ответ кандидата на русском языке.
 Верни только валидный JSON без markdown, комментариев и текста вне JSON.
-Обязательные поля: criterion_scores, summary, strengths, issues, covered_keypoints, missing_keypoints, detected_mistakes, recommendations.
+Обязательные поля: criterion_scores и summary.
 Поле оценок должно называться строго criterion_scores, не criteria_scores.
 criterion_scores должен содержать ключи correctness, completeness, clarity, practicality, terminology со значениями 0..100.
 Все текстовые поля должны быть на русском языке.
-Пиши очень компактно: summary в 1 коротком предложении до 12 слов, каждый список строго до 1 пункта.
+Не добавляй дополнительные поля.
+Пиши очень компактно: summary в 1 коротком предложении до 12 слов.
 """.strip()
 
 
@@ -76,9 +89,9 @@ class HFLLMProvider(BaseLLMProvider):
             return grounded
 
         try:
-            schema = _single_assessment_schema()
+            schema = _hf_assessment_schema()
             prompt = self._build_chat_prompt(context)
-            parsed = self._generate_and_parse(prompt, schema)
+            parsed = self._generate_and_parse(prompt, schema, context=context)
             return _build_assessment(_normalize_payload(parsed), context)
         except IntegrationError as exc:
             if not self._should_fallback(exc):
@@ -121,14 +134,25 @@ class HFLLMProvider(BaseLLMProvider):
 
         return [item for item in assessments if item is not None]
 
-    def _generate_and_parse(self, prompt: str, schema: dict[str, Any]) -> dict[str, Any]:
+    def _generate_and_parse(
+        self,
+        prompt: str,
+        schema: dict[str, Any],
+        *,
+        context: QuestionAnalysisContext | None = None,
+    ) -> dict[str, Any]:
         content = self._generate(prompt, self.max_new_tokens)
         try:
             return _parse_llm_json(content)
         except IntegrationError as exc:
             if exc.code != "INVALID_MODEL_OUTPUT":
                 raise
-            logger.warning('hf.generate.invalid_json_first_pass')
+            self._log_invalid_model_output(
+                stage='single_primary',
+                content=content,
+                exc=exc,
+                context=context,
+            )
 
         repair_prompt = self._build_repair_chat_prompt(content, schema)
         repaired = self._generate(repair_prompt, self.repair_max_new_tokens)
@@ -137,7 +161,12 @@ class HFLLMProvider(BaseLLMProvider):
         except IntegrationError as exc:
             if exc.code != "INVALID_MODEL_OUTPUT":
                 raise
-            logger.warning('hf.generate.invalid_json_repair_pass')
+            self._log_invalid_model_output(
+                stage='single_repair',
+                content=repaired,
+                exc=exc,
+                context=context,
+            )
 
         content = self._generate(prompt, self.retry_max_new_tokens)
         try:
@@ -145,7 +174,12 @@ class HFLLMProvider(BaseLLMProvider):
         except IntegrationError as exc:
             if exc.code != "INVALID_MODEL_OUTPUT":
                 raise
-            logger.warning('hf.generate.invalid_json_retry_pass')
+            self._log_invalid_model_output(
+                stage='single_retry',
+                content=content,
+                exc=exc,
+                context=context,
+            )
             raise
 
     def _assess_chunk(
@@ -174,9 +208,39 @@ class HFLLMProvider(BaseLLMProvider):
             except IntegrationError as exc:
                 if exc.code != "INVALID_MODEL_OUTPUT":
                     raise
-                parsed = self._generate_and_parse(prompt, _single_assessment_schema())
+                self._log_invalid_model_output(
+                    stage='batch_primary',
+                    content=content,
+                    exc=exc,
+                    context=context,
+                )
+                parsed = self._generate_and_parse(
+                    prompt,
+                    _hf_assessment_schema(),
+                    context=context,
+                )
             results.append((index, _build_assessment(_normalize_payload(parsed), context)))
         return results
+
+    def _log_invalid_model_output(
+        self,
+        *,
+        stage: str,
+        content: str,
+        exc: IntegrationError,
+        context: QuestionAnalysisContext | None,
+    ) -> None:
+        item_id = context.session_item.item_id if context is not None else '-'
+        question_id = context.session_item.question_id if context is not None else '-'
+        logger.warning(
+            'hf.generate.invalid_json stage=%s item_id=%s question_id=%s output_len=%s snippet=%s details=%s',
+            stage,
+            item_id,
+            question_id,
+            len(content),
+            _log_snippet(content),
+            _log_details(exc.details),
+        )
 
     def _build_model_version(self) -> str:
         if self.adapter_path:
@@ -205,22 +269,11 @@ class HFLLMProvider(BaseLLMProvider):
                 criterion.name: criterion.weight
                 for criterion in context.rubric.criteria
             },
-            "expected_keypoints": context.rubric.keypoints[:3],
-            "recommendation_hints": context.rubric.recommendation_hints[:1],
-            "mistake_hints": [
-                pattern.message
-                for pattern in context.rubric.mistake_patterns[:1]
-            ],
+            "expected_keypoints": context.rubric.keypoints[:2],
             "context_snippets": [snippet.excerpt for snippet in context.retrieved_chunks[:1]],
             "required_json_keys": [
                 "criterion_scores",
                 "summary",
-                "strengths",
-                "issues",
-                "covered_keypoints",
-                "missing_keypoints",
-                "detected_mistakes",
-                "recommendations",
             ],
         }
 
@@ -245,6 +298,8 @@ class HFLLMProvider(BaseLLMProvider):
     def _generate(self, prompt: str, max_new_tokens: int) -> str:
         tokenizer, model = self._load()
         torch = self._torch
+        started = perf_counter()
+        input_device = "unknown"
         try:
             inputs = tokenizer(prompt, return_tensors="pt")
             input_device = self._input_device(model)
@@ -258,12 +313,30 @@ class HFLLMProvider(BaseLLMProvider):
                     eos_token_id=tokenizer.eos_token_id,
                 )
             generated = output_ids[0, inputs["input_ids"].shape[-1] :]
-            return tokenizer.decode(generated, skip_special_tokens=True).strip()
+            content = tokenizer.decode(generated, skip_special_tokens=True).strip()
+            logger.info(
+                'hf.generate.completed mode=single device=%s max_new_tokens=%s prompt_chars=%s output_len=%s duration_ms=%s',
+                input_device,
+                max_new_tokens,
+                len(prompt),
+                len(content),
+                _duration_ms(started),
+            )
+            return content
         except RuntimeError as exc:
             message = str(exc)
             code = "MODEL_RUNTIME_ERROR"
             if "out of memory" in message.lower():
                 code = "MODEL_OUT_OF_MEMORY"
+            logger.warning(
+                'hf.generate.failed mode=single device=%s max_new_tokens=%s prompt_chars=%s duration_ms=%s code=%s reason=%s',
+                input_device,
+                max_new_tokens,
+                len(prompt),
+                _duration_ms(started),
+                code,
+                message[:300],
+            )
             raise IntegrationError(
                 "Ошибка локальной HF/LoRA модели при генерации ответа.",
                 code=code,
@@ -273,6 +346,8 @@ class HFLLMProvider(BaseLLMProvider):
     def _generate_batch(self, prompts: list[str], max_new_tokens: int) -> list[str]:
         tokenizer, model = self._load()
         torch = self._torch
+        started = perf_counter()
+        input_device = "unknown"
         try:
             inputs = tokenizer(
                 prompts,
@@ -292,12 +367,32 @@ class HFLLMProvider(BaseLLMProvider):
                     eos_token_id=tokenizer.eos_token_id,
                 )
             generated = output_ids[:, prompt_token_count:]
-            return [item.strip() for item in tokenizer.batch_decode(generated, skip_special_tokens=True)]
+            contents = [item.strip() for item in tokenizer.batch_decode(generated, skip_special_tokens=True)]
+            logger.info(
+                'hf.generate.completed mode=batch device=%s batch_size=%s max_new_tokens=%s prompt_chars=%s output_lens=%s duration_ms=%s',
+                input_device,
+                len(prompts),
+                max_new_tokens,
+                sum(len(prompt) for prompt in prompts),
+                [len(item) for item in contents],
+                _duration_ms(started),
+            )
+            return contents
         except RuntimeError as exc:
             message = str(exc)
             code = "MODEL_RUNTIME_ERROR"
             if "out of memory" in message.lower():
                 code = "MODEL_OUT_OF_MEMORY"
+            logger.warning(
+                'hf.generate.failed mode=batch device=%s batch_size=%s max_new_tokens=%s prompt_chars=%s duration_ms=%s code=%s reason=%s',
+                input_device,
+                len(prompts),
+                max_new_tokens,
+                sum(len(prompt) for prompt in prompts),
+                _duration_ms(started),
+                code,
+                message[:300],
+            )
             raise IntegrationError(
                 "Ошибка локальной HF/LoRA модели при пакетной генерации ответа.",
                 code=code,
@@ -439,3 +534,23 @@ def _normalize_payload(parsed: dict[str, Any]) -> dict[str, Any]:
     if "criterion_scores" not in parsed and "criteria_scores" in parsed:
         parsed["criterion_scores"] = parsed["criteria_scores"]
     return parsed
+
+
+def _log_snippet(content: str, limit: int = 500) -> str:
+    collapsed = " ".join(content.split())
+    if len(collapsed) <= limit:
+        return collapsed
+    return f"{collapsed[:limit]}..."
+
+
+def _log_details(details: dict[str, Any] | None) -> str:
+    if not details:
+        return '-'
+    try:
+        return json.dumps(details, ensure_ascii=False)[:400]
+    except TypeError:
+        return str(details)[:400]
+
+
+def _duration_ms(started_at: float) -> int:
+    return round((perf_counter() - started_at) * 1000)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from interview_analysis.exceptions import IntegrationError
 from interview_analysis.models import (
@@ -129,6 +130,29 @@ def test_assess_falls_back_to_grounded_on_invalid_output() -> None:
     assert assessment.score == expected.score
 
 
+def test_assess_logs_invalid_model_output_details(caplog) -> None:
+    provider = HFLLMProvider(
+        base_model='Qwen/Qwen2.5-3B-Instruct',
+        adapter_path=None,
+        batch_size=1,
+        load_in_4bit=False,
+        fallback_to_grounded=True,
+    )
+    context = _build_context('item-1')
+
+    provider._build_chat_prompt = lambda context: f"prompt::{context.session_item.item_id}"
+    provider._build_repair_chat_prompt = lambda raw_content, schema: 'repair'
+    provider._generate = lambda prompt, max_new_tokens: '{"criterion_scores": {"correctness": 80}'
+
+    with caplog.at_level(logging.WARNING):
+        provider.assess(context)
+
+    assert any(record.message.startswith('hf.generate.invalid_json') for record in caplog.records)
+    assert any('item_id=item-1' in record.message for record in caplog.records)
+    assert any('question_id=question-item-1' in record.message for record in caplog.records)
+    assert any('snippet={"criterion_scores": {"correctness": 80}' in record.message for record in caplog.records)
+
+
 def test_assess_batch_bypasses_llm_on_cpu_when_enabled() -> None:
     provider = HFLLMProvider(
         base_model='Qwen/Qwen2.5-3B-Instruct',
@@ -149,6 +173,37 @@ def test_assess_batch_bypasses_llm_on_cpu_when_enabled() -> None:
 
     assert len(assessments) == 2
     assert all(item.summary for item in assessments)
+
+
+def test_assess_batch_logs_invalid_batch_item_output(caplog) -> None:
+    provider = HFLLMProvider(
+        base_model='Qwen/Qwen2.5-3B-Instruct',
+        adapter_path=None,
+        batch_size=2,
+        load_in_4bit=False,
+    )
+    contexts = [_build_context('item-1'), _build_context('item-2')]
+
+    provider._build_chat_prompt = lambda context: f"prompt::{context.session_item.item_id}"
+
+    def fake_generate_batch(prompts: list[str], max_new_tokens: int) -> list[str]:
+        return [
+            '{"criterion_scores": {"correctness": 80}',
+            _single_result('batch item-2 summary'),
+        ]
+
+    def fake_generate(prompt: str, max_new_tokens: int) -> str:
+        return _single_result(f'{prompt} repaired')
+
+    provider._generate_batch = fake_generate_batch
+    provider._generate = fake_generate
+
+    with caplog.at_level(logging.WARNING):
+        assessments = provider.assess_batch(contexts)
+
+    assert assessments[0].summary == 'prompt::item-1 repaired'
+    assert any('stage=batch_primary' in record.message for record in caplog.records)
+    assert any('item_id=item-1' in record.message for record in caplog.records)
 
 
 def _build_context(item_id: str, answer_text: str | None = None) -> QuestionAnalysisContext:
