@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import logging
 from statistics import mean
+from time import perf_counter
 
 from interview_analysis.core.serialization import utcnow_iso
 from interview_analysis.core.topic_catalog import topic_label
@@ -11,6 +13,9 @@ from interview_analysis.models import (
     TopicSummary,
     VersionInfo,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 CRITERION_GUIDANCE = {
@@ -33,6 +38,15 @@ class ReportBuilder:
         feedback_items: list[QuestionFeedback],
         versions: VersionInfo,
     ) -> AssessmentReport:
+        started = perf_counter()
+        logger.info(
+            'report.build.started request_id=%s session_id=%s items=%s specialization=%s grade=%s',
+            request_id,
+            session_id,
+            len(feedback_items),
+            specialization,
+            grade,
+        )
         overall_score = round(mean(item.score for item in feedback_items))
         criterion_scores = _aggregate_criterion_scores(feedback_items)
         grouped: dict[str, list[QuestionFeedback]] = defaultdict(list)
@@ -68,13 +82,21 @@ class ReportBuilder:
             overall_score=overall_score,
         )
         weakest_topic = topic_summaries[0].topic if topic_summaries else "unknown"
+        logger.info(
+            'report.build.aggregates request_id=%s overall_score=%s criterion_scores=%s weakest_topics=%s recommendations=%s',
+            request_id,
+            overall_score,
+            criterion_scores,
+            [topic_label(item.topic) for item in topic_summaries[:2]],
+            recommendations,
+        )
         summary = (
             f"Сформирован пост-сессионный отчёт по {len(feedback_items)} вопросам. "
             f"Средний балл по сессии: {overall_score}/100. "
             f"Наибольшее внимание стоит уделить теме '{topic_label(weakest_topic)}'."
         )
 
-        return AssessmentReport(
+        report = AssessmentReport(
             request_id=request_id,
             session_id=session_id,
             client_id=client_id,
@@ -89,6 +111,16 @@ class ReportBuilder:
             versions=versions,
             generated_at=utcnow_iso(),
         )
+        logger.info(
+            'report.build.completed request_id=%s session_id=%s overall_score=%s topics=%s recommendations=%s duration_ms=%s',
+            request_id,
+            session_id,
+            report.overall_score,
+            len(report.topics),
+            len(report.recommendations),
+            _duration_ms(started),
+        )
+        return report
 
 
 def _aggregate_criterion_scores(feedback_items: list[QuestionFeedback]) -> dict[str, int]:
@@ -183,3 +215,7 @@ def _deduplicate(values) -> list[str]:
         result.append(value)
         seen.add(value)
     return result
+
+
+def _duration_ms(started_at: float) -> int:
+    return round((perf_counter() - started_at) * 1000)

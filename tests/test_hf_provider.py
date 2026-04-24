@@ -229,7 +229,7 @@ def test_build_user_payload_contains_full_personalization_context() -> None:
     ]
     assert payload['recommendation_hints'] == ['Add more detail']
     assert isinstance(payload['criteria'], list)
-    assert payload['list_limits']['recommendations'] == 3
+    assert payload['list_limits']['recommendations'] == 2
 
 
 def _build_context(item_id: str, answer_text: str | None = None) -> QuestionAnalysisContext:

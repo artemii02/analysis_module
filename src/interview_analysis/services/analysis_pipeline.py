@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from time import perf_counter
 
 from interview_analysis.core.topic_catalog import topic_label
 from interview_analysis.exceptions import UnknownQuestionError
@@ -29,9 +30,26 @@ class AnalysisPipeline:
         self.report_builder = report_builder
 
     def analyze(self, request) -> AssessmentReport:
+        started = perf_counter()
+        logger.info(
+            'analysis.pipeline.started request_id=%s session_id=%s specialization=%s grade=%s items=%s',
+            request.request_id,
+            request.session_id,
+            request.scenario.specialization.value,
+            request.scenario.grade.value,
+            len(request.items),
+        )
         contexts: list[QuestionAnalysisContext] = []
         used_runtime_content = False
         for item in request.items:
+            item_started = perf_counter()
+            logger.info(
+                'analysis.context.started item_id=%s question_id=%s answer_chars=%s tags=%s',
+                item.item_id,
+                item.question_id,
+                len(item.answer_text),
+                len(item.tags),
+            )
             try:
                 question = self.repository.resolve_question(
                     item.question_id,
@@ -72,7 +90,16 @@ class AnalysisPipeline:
                     request.scenario.specialization.value,
                     request.scenario.grade.value,
                 )
+            retrieval_started = perf_counter()
             retrieved_chunks = self.retriever.retrieve(request.scenario, item, question)
+            logger.info(
+                'analysis.retrieval.completed item_id=%s question_id=%s chunks=%s top_score=%s duration_ms=%s',
+                item.item_id,
+                item.question_id,
+                len(retrieved_chunks),
+                retrieved_chunks[0].score if retrieved_chunks else '-',
+                _duration_ms(retrieval_started),
+            )
             normalized_answer = normalize_answer(item.answer_text)
             contexts.append(
                 QuestionAnalysisContext(
@@ -84,8 +111,30 @@ class AnalysisPipeline:
                     normalized_answer=normalized_answer,
                 )
             )
+            logger.info(
+                'analysis.context.ready item_id=%s question_id=%s topic=%s rubric_keypoints=%s normalized_chars=%s duration_ms=%s',
+                item.item_id,
+                item.question_id,
+                question.topic,
+                len(rubric.keypoints),
+                len(normalized_answer),
+                _duration_ms(item_started),
+            )
 
+        llm_started = perf_counter()
+        logger.info(
+            'analysis.llm.started request_id=%s items=%s provider=%s',
+            request.request_id,
+            len(contexts),
+            self.llm_provider.__class__.__name__,
+        )
         assessments = self.llm_provider.assess_batch(contexts)
+        logger.info(
+            'analysis.llm.completed request_id=%s items=%s duration_ms=%s',
+            request.request_id,
+            len(assessments),
+            _duration_ms(llm_started),
+        )
         feedback_items: list[QuestionFeedback] = []
         for context, assessment in zip(contexts, assessments, strict=True):
             feedback_items.append(
@@ -106,6 +155,16 @@ class AnalysisPipeline:
                     context_snippets=context.retrieved_chunks,
                 )
             )
+            logger.info(
+                'analysis.feedback.ready item_id=%s question_id=%s topic=%s score=%s strengths=%s issues=%s recommendations=%s',
+                context.session_item.item_id,
+                context.session_item.question_id,
+                topic_label(context.question.topic),
+                assessment.score,
+                len(assessment.strengths),
+                len(assessment.issues),
+                len(assessment.recommendations),
+            )
 
         if used_runtime_content:
             versions = self.repository.build_version_info(
@@ -119,7 +178,14 @@ class AnalysisPipeline:
                 model_version=self.llm_provider.model_version,
                 prompt_version=self.llm_provider.prompt_version,
             )
-        return self.report_builder.build(
+        report_started = perf_counter()
+        logger.info(
+            'analysis.report_builder.started request_id=%s feedback_items=%s used_runtime_content=%s',
+            request.request_id,
+            len(feedback_items),
+            used_runtime_content,
+        )
+        report = self.report_builder.build(
             request_id=request.request_id,
             session_id=request.session_id,
             client_id=request.client_id,
@@ -128,3 +194,22 @@ class AnalysisPipeline:
             feedback_items=feedback_items,
             versions=versions,
         )
+        logger.info(
+            'analysis.report_builder.completed request_id=%s overall_score=%s topics=%s recommendations=%s duration_ms=%s',
+            request.request_id,
+            report.overall_score,
+            len(report.topics),
+            len(report.recommendations),
+            _duration_ms(report_started),
+        )
+        logger.info(
+            'analysis.pipeline.completed request_id=%s session_id=%s total_duration_ms=%s',
+            request.request_id,
+            request.session_id,
+            _duration_ms(started),
+        )
+        return report
+
+
+def _duration_ms(started_at: float) -> int:
+    return round((perf_counter() - started_at) * 1000)

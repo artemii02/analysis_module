@@ -60,8 +60,9 @@ def create_report(
     service=Depends(get_service),
 ):
     request = payload.to_domain()
+    total_answer_chars = sum(len(item.answer_text) for item in request.items)
     logger.info(
-        'assessment.report.received request_id=%s session_id=%s client_id=%s mode=%s specialization=%s grade=%s items=%s',
+        'assessment.report.received request_id=%s session_id=%s client_id=%s mode=%s specialization=%s grade=%s items=%s total_answer_chars=%s',
         request.request_id,
         request.session_id,
         request.client_id,
@@ -69,6 +70,7 @@ def create_report(
         request.scenario.specialization.value,
         request.scenario.grade.value,
         len(request.items),
+        total_answer_chars,
     )
     submission = service.register_request(request)
     job = submission.job
@@ -84,10 +86,11 @@ def create_report(
             return _report_payload(job)
         if submission.created_new or job.status == JobStatus.CREATED:
             logger.info(
-                'assessment.report.async_enqueued job_id=%s request_id=%s created_new=%s',
+                'assessment.report.async_enqueued job_id=%s request_id=%s created_new=%s items=%s',
                 job.job_id,
                 job.request_id,
                 submission.created_new,
+                len(request.items),
             )
             background_tasks.add_task(service.process_async, job.job_id, request)
         else:
@@ -97,7 +100,15 @@ def create_report(
                 job.request_id,
                 job.status.value,
             )
-        return JSONResponse(status_code=202, content=to_camel_case_keys(_job_payload(job)))
+        job_payload = to_camel_case_keys(_job_payload(job))
+        logger.info(
+            'assessment.report.async_response job_id=%s request_id=%s status=%s response_keys=%s',
+            job.job_id,
+            job.request_id,
+            job.status.value,
+            list(job_payload.keys()),
+        )
+        return JSONResponse(status_code=202, content=job_payload)
 
     logger.info(
         'assessment.report.sync_started job_id=%s request_id=%s',
@@ -113,7 +124,15 @@ def create_report(
         report.overall_score,
         len(report.questions),
     )
-    return _report_payload(job, report)
+    response_payload = _report_payload(job, report)
+    logger.info(
+        'assessment.report.sync_response job_id=%s request_id=%s topics=%s recommendations=%s',
+        job.job_id,
+        job.request_id,
+        len(report.topics),
+        len(report.recommendations),
+    )
+    return response_payload
 
 
 @router.get('/report/{job_id}/status', response_model=JobPayload, response_model_by_alias=True)
@@ -124,9 +143,11 @@ def get_report_status(
 ):
     job = service.get_job(job_id)
     logger.info(
-        'assessment.report.status job_id=%s status=%s',
+        'assessment.report.status job_id=%s status=%s has_report=%s error_code=%s',
         job_id,
         job.status.value,
+        bool(job.report),
+        job.error_code or '-',
     )
     return _job_payload(job)
 
@@ -140,10 +161,11 @@ def get_report(
     report = service.get_report(job_id)
     job = service.get_job(job_id)
     logger.info(
-        'assessment.report.fetch job_id=%s request_id=%s overall_score=%s',
+        'assessment.report.fetch job_id=%s request_id=%s overall_score=%s recommendations=%s',
         job_id,
         job.request_id,
         report.overall_score,
+        len(report.recommendations),
     )
     return _report_payload(job, report)
 

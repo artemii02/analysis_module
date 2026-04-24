@@ -106,6 +106,12 @@ class AssessmentService:
         started = perf_counter()
         self.job_store.mark_processing(job_id)
         logger.info(
+            'assessment.execution.processing job_id=%s request_id=%s status=%s',
+            job_id,
+            request.request_id,
+            JobStatus.PROCESSING.value,
+        )
+        logger.info(
             'assessment.execution.started job_id=%s request_id=%s specialization=%s grade=%s items=%s',
             job_id,
             request.request_id,
@@ -144,11 +150,13 @@ class AssessmentService:
         self.job_store.mark_ready(job_id, report)
         self.metrics.record_success(duration_ms)
         logger.info(
-            'assessment.execution.ready job_id=%s request_id=%s overall_score=%s questions=%s duration_ms=%s',
+            'assessment.execution.ready job_id=%s request_id=%s overall_score=%s questions=%s topics=%s recommendations=%s duration_ms=%s',
             job_id,
             request.request_id,
             report.overall_score,
             len(report.questions),
+            len(report.topics),
+            len(report.recommendations),
             duration_ms,
         )
         return report

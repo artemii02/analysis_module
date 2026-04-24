@@ -1,6 +1,7 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from functools import lru_cache
+import logging
 
 from fastapi import Header
 
@@ -17,6 +18,9 @@ from interview_analysis.services.report_builder import ReportBuilder
 from interview_analysis.services.retrieval import SimpleKnowledgeRetriever
 
 
+logger = logging.getLogger(__name__)
+
+
 @lru_cache(maxsize=1)
 def get_service() -> AssessmentService:
     settings = get_settings()
@@ -24,6 +28,19 @@ def get_service() -> AssessmentService:
     retriever = SimpleKnowledgeRetriever(repository, settings.knowledge_limit)
     llm_provider = _build_llm_provider(settings)
     pipeline = AnalysisPipeline(repository, retriever, llm_provider, ReportBuilder())
+    logger.info(
+        'service.created llm_mode=%s provider=%s job_store_backend=%s knowledge_limit=%s hf_device=%s hf_batch_size=%s hf_max_new_tokens=%s hf_retry_max_new_tokens=%s hf_repair_max_new_tokens=%s fallback_to_grounded=%s',
+        settings.llm_mode,
+        llm_provider.__class__.__name__,
+        settings.job_store_backend,
+        settings.knowledge_limit,
+        settings.hf_device,
+        settings.hf_batch_size,
+        settings.hf_max_new_tokens,
+        settings.hf_retry_max_new_tokens,
+        settings.hf_repair_max_new_tokens,
+        settings.llm_fallback_to_grounded,
+    )
     return AssessmentService(
         pipeline=pipeline,
         job_store=_build_job_store(settings),

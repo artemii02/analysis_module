@@ -21,6 +21,17 @@ logger = logging.getLogger(__name__)
 def create_app() -> FastAPI:
     settings = get_settings()
     _configure_logging(settings)
+    logger.info(
+        'app.create settings llm_mode=%s log_level=%s job_store_backend=%s request_timeout_seconds=%s knowledge_limit=%s hf_device=%s hf_batch_size=%s hf_max_new_tokens=%s',
+        settings.llm_mode,
+        settings.log_level,
+        settings.job_store_backend,
+        settings.request_timeout_seconds,
+        settings.knowledge_limit,
+        settings.hf_device,
+        settings.hf_batch_size,
+        settings.hf_max_new_tokens,
+    )
     app = FastAPI(
         title=settings.app_name,
         version=__version__,

@@ -35,15 +35,11 @@ criterion_scores должен содержать ключи correctness, complet
 Все текстовые поля должны быть на русском языке.
 Не добавляй дополнительные поля.
 Опирайся только на переданные вопрос, ответ, ключевые пункты, шаблоны ошибок и контекст.
-strengths должны быть конкретными и относиться только к тому, что кандидат действительно сказал правильно.
-Если в ответе есть хотя бы один корректный технический фрагмент, укажи 1-3 сильные стороны. Если корректных фрагментов нет, верни пустой список.
-issues и missing_keypoints должны отражать реальные пробелы именно этого ответа, а не общие советы.
-recommendations должны быть персонализированы под текущий ответ:
-- при низком качестве ответа делай рекомендации базовыми и восстановительными;
-- при среднем качестве указывай, чего не хватило до уверенного ответа;
-- при хорошем качестве предлагай точечные улучшения глубины, точности и практики.
+strengths должны отражать только реально корректные фрагменты ответа. Если их нет, верни пустой список.
+issues, missing_keypoints и recommendations должны быть персонализированы под текущий ответ.
+При низком качестве ответа рекомендации делай базовыми. При среднем качестве указывай, чего не хватило. При хорошем качестве давай точечные улучшения глубины и практики.
 Не повторяй одинаковые общие фразы в разных полях.
-Пиши компактно: summary до 2 коротких предложений, списки до 3 элементов.
+Пиши очень компактно: summary до 2 коротких предложений. Каждый список - до 2 коротких пунктов.
 """.strip()
 
 
@@ -190,6 +186,11 @@ class HFLLMProvider(BaseLLMProvider):
     ) -> list[tuple[int, QuestionAssessment]]:
         if not chunk:
             return []
+        logger.info(
+            'hf.assess_batch.chunk_started chunk_size=%s item_ids=%s',
+            len(chunk),
+            [context.session_item.item_id for _, context in chunk],
+        )
         if len(chunk) == 1:
             index, context = chunk[0]
             return [(index, self.assess(context))]
@@ -199,6 +200,11 @@ class HFLLMProvider(BaseLLMProvider):
             contents = self._generate_batch(prompts, self.max_new_tokens)
         except IntegrationError as exc:
             if exc.code in {"MODEL_TIMEOUT", "MODEL_RUNTIME_ERROR", "MODEL_OUT_OF_MEMORY"} and len(chunk) > 1:
+                logger.warning(
+                    'hf.assess_batch.chunk_split chunk_size=%s code=%s',
+                    len(chunk),
+                    exc.code,
+                )
                 midpoint = max(1, len(chunk) // 2)
                 return self._assess_chunk(chunk[:midpoint]) + self._assess_chunk(chunk[midpoint:])
             raise
@@ -222,6 +228,11 @@ class HFLLMProvider(BaseLLMProvider):
                     context=context,
                 )
             results.append((index, _build_assessment(_normalize_payload(parsed), context)))
+        logger.info(
+            'hf.assess_batch.chunk_completed chunk_size=%s item_ids=%s',
+            len(chunk),
+            [context.session_item.item_id for _, context in chunk],
+        )
         return results
 
     def _log_invalid_model_output(
@@ -251,12 +262,25 @@ class HFLLMProvider(BaseLLMProvider):
 
     def _build_chat_prompt(self, context: QuestionAnalysisContext) -> str:
         user_payload = self._build_user_payload(context)
-        return self._apply_chat_template(
+        prompt = self._apply_chat_template(
             [
                 {"role": "system", "content": SFT_SYSTEM_PROMPT},
                 {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
             ]
         )
+        logger.info(
+            'hf.prompt.built item_id=%s question_id=%s question_chars=%s answer_chars=%s keypoints=%s snippets=%s hints=%s patterns=%s prompt_chars=%s',
+            context.session_item.item_id,
+            context.session_item.question_id,
+            len(user_payload["question_text"]),
+            len(user_payload["answer_text"]),
+            len(user_payload["expected_keypoints"]),
+            len(user_payload["context_snippets"]),
+            len(user_payload["recommendation_hints"]),
+            len(user_payload["mistake_patterns"]),
+            len(prompt),
+        )
+        return prompt
 
     def _build_user_payload(self, context: QuestionAnalysisContext) -> dict[str, Any]:
         return {
@@ -265,26 +289,26 @@ class HFLLMProvider(BaseLLMProvider):
             "topic_code": context.question.topic,
             "topic_label": topic_label(context.question.topic),
             "question_id": context.question.question_id,
-            "question_text": context.session_item.question_text,
-            "answer_text": context.session_item.answer_text,
+            "question_text": _compact_text(context.session_item.question_text, limit=320),
+            "answer_text": _compact_text(context.session_item.answer_text, limit=900),
             "criteria": [
                 {
                     "name": criterion.name,
                     "weight": criterion.weight,
-                    "description": criterion.description,
+                    "description": _compact_text(criterion.description, limit=120),
                 }
                 for criterion in context.rubric.criteria
             ],
-            "expected_keypoints": context.rubric.keypoints[:4],
-            "recommendation_hints": context.rubric.recommendation_hints[:4],
+            "expected_keypoints": [_compact_text(item, limit=120) for item in context.rubric.keypoints[:3]],
+            "recommendation_hints": [_compact_text(item, limit=110) for item in context.rubric.recommendation_hints[:2]],
             "mistake_patterns": [
                 {
-                    "trigger_terms": pattern.trigger_terms,
-                    "message": pattern.message,
+                    "trigger_terms": pattern.trigger_terms[:3],
+                    "message": _compact_text(pattern.message, limit=110),
                 }
-                for pattern in context.rubric.mistake_patterns[:4]
+                for pattern in context.rubric.mistake_patterns[:2]
             ],
-            "context_snippets": [snippet.excerpt for snippet in context.retrieved_chunks[:2]],
+            "context_snippets": [_compact_text(snippet.excerpt, limit=120) for snippet in context.retrieved_chunks[:1]],
             "required_json_keys": [
                 "criterion_scores",
                 "summary",
@@ -296,12 +320,12 @@ class HFLLMProvider(BaseLLMProvider):
                 "recommendations",
             ],
             "list_limits": {
-                "strengths": 3,
-                "issues": 3,
-                "covered_keypoints": 3,
-                "missing_keypoints": 3,
-                "detected_mistakes": 3,
-                "recommendations": 3,
+                "strengths": 2,
+                "issues": 2,
+                "covered_keypoints": 2,
+                "missing_keypoints": 2,
+                "detected_mistakes": 2,
+                "recommendations": 2,
             },
         }
 
@@ -328,6 +352,11 @@ class HFLLMProvider(BaseLLMProvider):
         torch = self._torch
         started = perf_counter()
         input_device = "unknown"
+        logger.info(
+            'hf.generate.started mode=single max_new_tokens=%s prompt_chars=%s',
+            max_new_tokens,
+            len(prompt),
+        )
         try:
             inputs = tokenizer(prompt, return_tensors="pt")
             input_device = self._input_device(model)
@@ -376,6 +405,12 @@ class HFLLMProvider(BaseLLMProvider):
         torch = self._torch
         started = perf_counter()
         input_device = "unknown"
+        logger.info(
+            'hf.generate.started mode=batch batch_size=%s max_new_tokens=%s prompt_chars=%s',
+            len(prompts),
+            max_new_tokens,
+            sum(len(prompt) for prompt in prompts),
+        )
         try:
             inputs = tokenizer(
                 prompts,
@@ -507,6 +542,18 @@ class HFLLMProvider(BaseLLMProvider):
             model.eval()
             if hasattr(model, "generation_config") and model.generation_config is not None:
                 model.generation_config.use_cache = True
+            logger.info(
+                'hf.load.completed base_model=%s adapter=%s runtime_device=%s configured_device=%s load_in_4bit=%s batch_size=%s max_new_tokens=%s retry_max_new_tokens=%s repair_max_new_tokens=%s',
+                self.base_model,
+                self.adapter_path.as_posix() if self.adapter_path else '-',
+                runtime_device,
+                self.device,
+                self.load_in_4bit,
+                self.batch_size,
+                self.max_new_tokens,
+                self.retry_max_new_tokens,
+                self.repair_max_new_tokens,
+            )
         except IntegrationError:
             raise
         except Exception as exc:
@@ -582,3 +629,10 @@ def _log_details(details: dict[str, Any] | None) -> str:
 
 def _duration_ms(started_at: float) -> int:
     return round((perf_counter() - started_at) * 1000)
+
+
+def _compact_text(value: str, limit: int) -> str:
+    collapsed = " ".join(str(value or "").split())
+    if len(collapsed) <= limit:
+        return collapsed
+    return f"{collapsed[:limit].rstrip()}..."
